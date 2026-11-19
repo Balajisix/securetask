@@ -1,0 +1,263 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PermissionScope {
+  OWN
+  ANY
+
+  @@map("permission_scope")
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+
+  @@map("task_status")
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+
+  @@map("task_priority")
+}
+
+// USER
+
+model User {
+  id    String @id @default(uuid()) @db.Uuid
+  email String @unique @db.VarChar(320)
+
+  passwordHash String @map("password_hash") @db.VarChar(255)
+
+  firstName String? @map("first_name") @db.VarChar(100)
+  lastName  String? @map("last_name") @db.VarChar(100)
+
+  isActive          Boolean   @default(true) @map("is_active")
+  emailVerifiedAt   DateTime? @map("email_verified_at") @db.Timestamptz(3)
+  passwordChangedAt DateTime? @map("password_changed_at") @db.Timestamptz(3)
+  lastLoginAt       DateTime? @map("last_login_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Relationships
+  userRoles           UserRole[] @relation("UserRoleMember")
+  roleAssignmentsMade UserRole[] @relation("RoleAssignedBy")
+
+  sessions Session[]
+  tasks    Task[]
+
+  auditLogs AuditLog[] @relation("AuditActor")
+
+  @@index([isActive])
+  @@map("users")
+}
+
+// ROLE
+
+model Role {
+  id String @id @default(uuid()) @db.Uuid
+
+  code        String  @unique @db.VarChar(50)
+  name        String  @db.VarChar(100)
+  description String? @db.VarChar(255)
+
+  // Prevent accidental deletion of system roles
+  isSystem Boolean @default(false) @map("is_system")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+// PERMISSION
+
+model Permission {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Example: tasks, users, roles
+  resource String @db.VarChar(50)
+
+  // Example: create, read, update, delete
+  action String @db.VarChar(50)
+
+  // OWN = user's own resources
+  // ANY = any resource within this application
+  scope PermissionScope @default(ANY)
+
+  // Example: tasks:read:own
+  code String @unique @db.VarChar(120)
+
+  description String? @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action, scope])
+  @@index([resource, action])
+  @@map("permissions")
+}
+
+// USER ROLE - MANY TO MANY
+
+model UserRole {
+  userId String @map("user_id") @db.Uuid
+  roleId String @map("role_id") @db.Uuid
+
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  // Who assigned this role?
+  assignedById String? @map("assigned_by_id") @db.Uuid
+
+  user User @relation("UserRoleMember", fields: [userId], references: [id], onDelete: Cascade)
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  assignedBy User? @relation("RoleAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@index([assignedById])
+  @@map("user_roles")
+}
+
+// ROLE PERMISSION - MANY TO MANY
+
+model RolePermission {
+  roleId       String @map("role_id") @db.Uuid
+  permissionId String @map("permission_id") @db.Uuid
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// SESSION
+
+model Session {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+
+  userAgent String? @map("user_agent") @db.Text
+  ipAddress String? @map("ip_address") @db.VarChar(45)
+
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt DateTime? @map("last_seen_at") @db.Timestamptz(3)
+
+  // Absolute session expiration
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshTokens RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// REFRESH TOKEN HISTORY
+
+model RefreshToken {
+  id        String @id @default(uuid()) @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+
+  // Never store the actual refresh token
+  tokenHash String @unique @map("token_hash") @db.VarChar(128)
+
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
+  @@index([sessionId, revokedAt])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+// TASK
+
+model Task {
+  id String @id @default(uuid()) @db.Uuid
+
+  title String @db.VarChar(200)
+
+  description String? @db.Text
+
+  status   TaskStatus   @default(TODO)
+  priority TaskPriority @default(MEDIUM)
+
+  dueAt       DateTime? @map("due_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+
+  ownerId String @map("owner_id") @db.Uuid
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([ownerId, createdAt])
+  @@index([ownerId, status, createdAt])
+  @@index([ownerId, dueAt])
+  @@index([status, dueAt])
+  @@map("tasks")
+}
+
+// AUDIT LOG
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  actorUserId String? @map("actor_user_id") @db.Uuid
+
+  action     String  @db.VarChar(100)
+  entityType String? @map("entity_type") @db.VarChar(100)
+  entityId   String? @map("entity_id") @db.VarChar(100)
+
+  // Additional structured event information
+  metadata Json? @db.JsonB
+
+  ipAddress String? @map("ip_address") @db.VarChar(45)
+  userAgent String? @map("user_agent") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
